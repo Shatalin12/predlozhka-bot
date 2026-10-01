@@ -14,7 +14,7 @@ from aiogram.fsm.context import FSMContext
 # ==================== НАСТРОЙКИ ====================
 # На Railway токен берётся из Variables (переменных окружения).
 # Локально, если переменной нет — используется токен ниже.
-TOKEN = os.getenv("TOKEN", "8608207756:AAFTO0DyEq8q-I94ECiYRQ-vYQmrGQ0N_Ko")
+TOKEN = os.getenv("TOKEN")
 ADMIN_CHAT_ID = -1003948032613
 CHANNEL_ID = "@tb72tb72"
 AUTO_ADD_USERNAME = True
