@@ -12,25 +12,12 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
 # ==================== НАСТРОЙКИ ====================
-# На Railway токен берётся из Variables (переменных окружения).
-# Локально, если переменной нет — используется токен ниже.
 TOKEN = os.getenv("TOKEN")
 ADMIN_CHAT_ID = -1003948032613
 CHANNEL_ID = "@tb72tb72"
 AUTO_ADD_USERNAME = True
-
-# Прокси нужен ТОЛЬКО для локального запуска через Napp.
-# На Railway он не нужен — Telegram там доступен напрямую.
-# Для локального запуска раскомментируй строки с PROXY и session.
-# PROXY = "socks5://127.0.0.1:10808"
 # ===================================================
 
-# Локальный запуск (раскомментировать при работе через Napp):
-# from aiogram.client.session.aiohttp import AiohttpSession
-# session = AiohttpSession(proxy=PROXY)
-# bot = Bot(token=TOKEN, session=session, default=DefaultBotProperties(parse_mode="HTML"))
-
-# Хостинг (Railway) — используется по умолчанию:
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
@@ -41,14 +28,14 @@ stats = {"received": 0, "published": 0, "rejected": 0}
 
 class Form(StatesGroup):
     waiting_choice = State()
-    waiting_photo = State()
+    waiting_content = State()
 
 
 # ==================== ТЕКСТЫ ====================
 
 REVIEW_WARNING = (
     "⏳ <b>Важно:</b> заявки рассматриваются <b>в течение дня</b>.\n"
-    "Пожалуйста, не отправляй одно и то же фото несколько раз — "
+    "Пожалуйста, не отправляй одно и то же несколько раз — "
     "это не ускорит рассмотрение."
 )
 
@@ -72,15 +59,13 @@ RULES = (
 
 USER_HELP = (
     "📖 <b>Что умеет этот бот</b>\n\n"
-    "Это бот-предложка для канала знакомств.\n"
-    "Ты можешь:\n"
-    "• отправить <b>фото</b> (с подписью или без) — станет заявкой\n"
-    "• <b>переслать боту пост из канала</b> — предложить его изменить\n\n"
-    "<b>Как отправить:</b>\n"
+    "Это бот-предложка для канала знакомств.\n\n"
+    "<b>Как отправить заявку:</b>\n"
     "1. Жми <b>📤 Отправить</b>\n"
     "2. Выбери: <b>С @username</b> или <b>🕶 Анонимно</b>\n"
-    "3. Отправь фото\n"
+    "3. Отправь <b>фото</b> (можно с подписью) <b>или</b> просто текст\n"
     "4. Жди уведомления\n\n"
+    "<b>Совет:</b> к фото добавь подпись — имя, о себе, кого ищешь.\n\n"
     "⏳ <b>Заявки рассматриваются в течение дня.</b>\n\n"
     "<b>Команды:</b>\n"
     "/start — начать заново\n"
@@ -91,7 +76,7 @@ USER_HELP = (
 USER_ABOUT = (
     "ℹ️ <b>О боте</b>\n\n"
     "Бот-предложка для канала знакомств.\n"
-    "Отправь фото — админ рассмотрит и, если ок, опубликует.\n\n"
+    "Отправь фото или текст — админ рассмотрит и, если ок, опубликует.\n\n"
     "⏳ <b>Срок рассмотрения:</b> в течение дня.\n\n"
     "Если хочешь — публикация будет анонимной."
 )
@@ -99,7 +84,7 @@ USER_ABOUT = (
 ADMIN_HELP = (
     "🛠 <b>Меню администратора</b>\n\n"
     "<b>Кнопки на каждом сообщении:</b>\n"
-    "✅ Опубликовать — фото уйдёт в канал\n"
+    "✅ Опубликовать — уйдёт в канал\n"
     "❌ Отклонить — автору придёт отказ\n"
     "✏️ Изменить подпись — ответь новым текстом на сообщение бота\n"
     "🔄 Сбросить правку — вернуть оригинал автора\n"
@@ -163,6 +148,9 @@ def build_admin_caption(info):
 
     if info.get("forwarded_from_channel"):
         mark += "\n🔁 <i>Переслано из канала</i>"
+
+    if info.get("is_text_only"):
+        mark += "\n📝 <i>Только текст</i>"
 
     cap = info["edited_caption"] if info["edited_caption"] is not None else info["caption"]
     return f"{mark}\n\n{cap}" if cap else mark
@@ -320,18 +308,19 @@ async def choose_mode(cb: CallbackQuery, state: FSMContext):
     mode = cb.data.split(":")[1]
     await state.update_data(anon=(mode == "anon"))
     await cb.message.edit_text(
-        "✅ Режим: " + ("анонимно 🕶" if mode == "anon" else "с @username 👤") +
-        "\n\nТеперь отправь фото (можно с подписью)."
+        "✅ Режим: " + ("анонимно 🕶" if mode == "anon" else "с @username 👤")
     )
     await cb.message.answer(
-        "⏳ Напоминаю: заявки рассматриваются <b>в течение дня</b>.\n"
-        "Как только админ примет решение — я пришлю уведомление."
+        "📷 Отправь <b>фото</b> (можно с подписью).\n\n"
+        "<b>Совет:</b> в подписи напиши имя/псевдоним, пару слов о себе и кого ищешь.\n\n"
+        "Либо отправь <b>просто текст</b>, если фото не хочешь."
     )
-    await state.set_state(Form.waiting_photo)
+    await cb.message.answer("⏳ Напоминаю: заявки рассматриваются <b>в течение дня</b>.")
+    await state.set_state(Form.waiting_content)
     await cb.answer()
 
 
-async def _send_to_admin(msg: types.Message, state: FSMContext, forwarded: bool):
+async def _send_to_admin(msg: types.Message, state: FSMContext, forwarded: bool, text_only: bool = False):
     data = await state.get_data()
     anon = data.get("anon", False if forwarded else True)
     await state.clear()
@@ -343,33 +332,53 @@ async def _send_to_admin(msg: types.Message, state: FSMContext, forwarded: bool)
     else:
         mark = f"👤 Автор: {msg.from_user.full_name} (id {msg.from_user.id})"
 
-    caption = msg.caption or ""
-    admin_caption_base = mark
-    if forwarded:
-        admin_caption_base += "\n🔁 <i>Переслано из канала</i>"
-    admin_caption = f"{admin_caption_base}\n\n{caption}" if caption else admin_caption_base
+    caption = msg.caption or msg.text or ""
 
-    sent = await bot.copy_message(
-        chat_id=ADMIN_CHAT_ID,
-        from_chat_id=msg.chat.id,
-        message_id=msg.message_id,
-    )
-    await bot.send_message(
-        chat_id=ADMIN_CHAT_ID,
-        text=admin_caption,
-        reply_to_message_id=sent.message_id,
-    )
-    try:
-        await bot.edit_message_reply_markup(
+    if text_only:
+        # Текстовая заявка — отправляем текстом
+        mark += "\n📝 <i>Только текст</i>"
+        admin_caption = f"{mark}\n\n{caption}" if caption else mark
+        sent = await bot.send_message(
             chat_id=ADMIN_CHAT_ID,
-            message_id=sent.message_id,
-            reply_markup=build_admin_kb(sent.message_id),
+            text=admin_caption,
         )
-    except Exception:
-        pass
+        # Обновляем клавиатуру с правильным ID
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=ADMIN_CHAT_ID,
+                message_id=sent.message_id,
+                reply_markup=build_admin_kb(sent.message_id),
+            )
+        except Exception:
+            pass
+        admin_msg_id = sent.message_id
+    else:
+        # Фото или пересланное — копируем
+        if forwarded:
+            mark += "\n🔁 <i>Переслано из канала</i>"
+        admin_caption = f"{mark}\n\n{caption}" if caption else mark
+        sent = await bot.copy_message(
+            chat_id=ADMIN_CHAT_ID,
+            from_chat_id=msg.chat.id,
+            message_id=msg.message_id,
+        )
+        await bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=admin_caption,
+            reply_to_message_id=sent.message_id,
+        )
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=ADMIN_CHAT_ID,
+                message_id=sent.message_id,
+                reply_markup=build_admin_kb(sent.message_id),
+            )
+        except Exception:
+            pass
+        admin_msg_id = sent.message_id
 
-    pending[sent.message_id] = {
-        "admin_msg_id": sent.message_id,
+    pending[admin_msg_id] = {
+        "admin_msg_id": admin_msg_id,
         "anon": anon,
         "user_id": msg.from_user.id,
         "username": msg.from_user.username,
@@ -377,6 +386,7 @@ async def _send_to_admin(msg: types.Message, state: FSMContext, forwarded: bool)
         "caption": caption,
         "edited_caption": None,
         "forwarded_from_channel": forwarded,
+        "is_text_only": text_only,
         "created_at": datetime.now().isoformat(timespec="seconds"),
     }
     stats["received"] += 1
@@ -385,18 +395,25 @@ async def _send_to_admin(msg: types.Message, state: FSMContext, forwarded: bool)
         "✅ <b>Заявка отправлена!</b>\n\n"
         "⏳ Заявки рассматриваются <b>в течение дня</b>.\n"
         "Я пришлю уведомление, когда админ примет решение — "
-        "не нужно отправлять фото повторно."
+        "не нужно отправлять повторно."
     )
 
 
-@dp.message(Form.waiting_photo, F.photo)
+@dp.message(Form.waiting_content, F.photo)
 async def handle_photo(msg: types.Message, state: FSMContext):
-    await _send_to_admin(msg, state, forwarded=False)
+    await _send_to_admin(msg, state, forwarded=False, text_only=False)
 
 
-@dp.message(Form.waiting_photo)
-async def not_photo(msg: types.Message):
-    await msg.answer("Пожалуйста, отправь именно <b>фото</b> 📷 (или /cancel)")
+@dp.message(Form.waiting_content, F.text)
+async def handle_text(msg: types.Message, state: FSMContext):
+    await _send_to_admin(msg, state, forwarded=False, text_only=True)
+
+
+@dp.message(Form.waiting_content)
+async def not_supported(msg: types.Message):
+    await msg.answer(
+        "Пожалуйста, отправь <b>фото</b> или <b>текст</b> 📷 (или /cancel)"
+    )
 
 
 @dp.message(F.forward_origin, F.chat.type == "private", F.chat.id != ADMIN_CHAT_ID)
@@ -440,15 +457,23 @@ async def apply_edit(msg: types.Message, state: FSMContext):
     if new_text == "-":
         new_text = ""
     info["edited_caption"] = new_text
-    try:
-        await bot.edit_message_text(
-            chat_id=ADMIN_CHAT_ID,
-            message_id=info.get("caption_msg_id", admin_msg_id),
-            text=build_admin_caption(info),
-            reply_markup=build_admin_kb(user_msg_id, published=bool(info.get("channel_msg_id"))),
-        )
-    except Exception:
-        await msg.answer("✅ Подпись обновлена.")
+
+    # Обновляем подпись
+    if info.get("is_text_only"):
+        try:
+            await bot.edit_message_text(
+                chat_id=ADMIN_CHAT_ID,
+                message_id=info["admin_msg_id"],
+                text=build_admin_caption(info),
+                reply_markup=build_admin_kb(user_msg_id, published=bool(info.get("channel_msg_id"))),
+            )
+        except Exception:
+            pass
+    else:
+        # Для фото подпись лежит в отдельном сообщении (reply), не в самом фото.
+        # Просто отвечаем — обновление отобразится в новой карточке.
+        pass
+
     await state.clear()
     await msg.answer(
         "✅ Подпись обновлена.\n\n"
@@ -469,12 +494,13 @@ async def reset_edit(cb: CallbackQuery):
         return
     info["edited_caption"] = None
     try:
-        await bot.edit_message_text(
-            chat_id=ADMIN_CHAT_ID,
-            message_id=info.get("caption_msg_id", info["admin_msg_id"]),
-            text=build_admin_caption(info),
-            reply_markup=build_admin_kb(msg_id, published=bool(info.get("channel_msg_id"))),
-        )
+        if info.get("is_text_only"):
+            await bot.edit_message_text(
+                chat_id=ADMIN_CHAT_ID,
+                message_id=info["admin_msg_id"],
+                text=build_admin_caption(info),
+                reply_markup=build_admin_kb(msg_id, published=bool(info.get("channel_msg_id"))),
+            )
     except Exception:
         pass
     await cb.answer("Правка сброшена 🔄")
@@ -498,12 +524,19 @@ async def publish(cb: CallbackQuery):
         signature = f"\n\n👤 @{info['username']}" if info["username"] else f"\n\n👤 {info['full_name']}"
         caption = (caption or "") + signature
 
-    sent = await bot.copy_message(
-        chat_id=CHANNEL_ID,
-        from_chat_id=ADMIN_CHAT_ID,
-        message_id=info["admin_msg_id"],
-        caption=caption or None,
-    )
+    if info.get("is_text_only"):
+        sent = await bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=caption or "(без текста)",
+        )
+    else:
+        sent = await bot.copy_message(
+            chat_id=CHANNEL_ID,
+            from_chat_id=ADMIN_CHAT_ID,
+            message_id=info["admin_msg_id"],
+            caption=caption or None,
+        )
+
     info["channel_msg_id"] = sent.message_id
     stats["published"] += 1
 
@@ -518,7 +551,7 @@ async def publish(cb: CallbackQuery):
     await cb.answer("Опубликовано ✅")
 
     try:
-        await bot.send_message(info["user_id"], "✅ Твоё фото опубликовано в канале!")
+        await bot.send_message(info["user_id"], "✅ Твоя заявка опубликована в канале!")
     except Exception:
         pass
 
@@ -562,7 +595,7 @@ async def reject(cb: CallbackQuery):
     stats["rejected"] += 1
     if info:
         try:
-            await bot.send_message(info["user_id"], "❌ Твоё фото отклонено.")
+            await bot.send_message(info["user_id"], "❌ Твоя заявка отклонена.")
         except Exception:
             pass
 
