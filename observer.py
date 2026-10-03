@@ -1,7 +1,5 @@
-# ==================== OBSERVER ====================
+# ==================== OBSERVER (с поддержкой медиа) ====================
 # Файл: observer.py
-# Публичный бот-наблюдатель: следит за удалёнными/изменёнными сообщениями
-# в личных чатах пользователей через Telegram Business.
 
 import os
 import asyncio
@@ -10,9 +8,6 @@ from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import (
-    InlineKeyboardMarkup, InlineKeyboardButton
-)
 from aiogram.client.default import DefaultBotProperties
 
 TOKEN_OBSERVER = os.getenv("TOKEN_OBSERVER")
@@ -59,6 +54,7 @@ async def obs_init_db():
                 message_id INTEGER,
                 text TEXT,
                 media_type TEXT,
+                media_file_id TEXT,
                 created_at TEXT,
                 is_deleted INTEGER DEFAULT 0,
                 edited_from TEXT,
@@ -110,16 +106,16 @@ async def obs_is_banned(user_id):
 
 
 async def obs_save_message(owner_id, chat_id, sender_id, sender_username, sender_name,
-                           message_id, text, media_type, is_outgoing):
+                           message_id, text, media_type, media_file_id, is_outgoing):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             INSERT INTO obs_messages
             (owner_id, chat_id, sender_id, sender_username, sender_name,
-             message_id, text, media_type, created_at, is_outgoing)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             message_id, text, media_type, media_file_id, created_at, is_outgoing)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             owner_id, chat_id, sender_id, sender_username, sender_name,
-            message_id, text, media_type,
+            message_id, text, media_type, media_file_id,
             datetime.now().isoformat(timespec="seconds"),
             1 if is_outgoing else 0
         ))
@@ -155,7 +151,7 @@ async def obs_mark_edited(chat_id, message_id, old_text, new_text):
         await db.commit()
 
 
-async def obs_recent(owner_id, limit=20):
+async def obs_recent(owner_id, limit=10):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -165,7 +161,7 @@ async def obs_recent(owner_id, limit=20):
             return [dict(r) for r in await cur.fetchall()]
 
 
-async def obs_deleted(owner_id, limit=20):
+async def obs_deleted(owner_id, limit=10):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -175,7 +171,7 @@ async def obs_deleted(owner_id, limit=20):
             return [dict(r) for r in await cur.fetchall()]
 
 
-async def obs_edited(owner_id, limit=20):
+async def obs_edited(owner_id, limit=10):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -185,7 +181,7 @@ async def obs_edited(owner_id, limit=20):
             return [dict(r) for r in await cur.fetchall()]
 
 
-async def obs_find(owner_id, query, limit=20):
+async def obs_find(owner_id, query, limit=10):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -245,17 +241,24 @@ async def obs_all_user_ids():
 
 # ==================== ВСПОМОГАТЕЛЬНОЕ ====================
 
-def obs_media_type(message: types.Message) -> str:
-    if message.photo: return "photo"
-    if message.video: return "video"
-    if message.voice: return "voice"
-    if message.audio: return "audio"
-    if message.document: return "document"
-    if message.sticker: return "sticker"
-    if message.video_note: return "video_note"
-    if message.animation: return "animation"
-    if message.text: return "text"
-    return "other"
+def obs_extract_media(message: types.Message):
+    if message.photo:
+        return "photo", message.photo[-1].file_id
+    if message.video:
+        return "video", message.video.file_id
+    if message.video_note:
+        return "video_note", message.video_note.file_id
+    if message.voice:
+        return "voice", message.voice.file_id
+    if message.audio:
+        return "audio", message.audio.file_id
+    if message.document:
+        return "document", message.document.file_id
+    if message.sticker:
+        return "sticker", message.sticker.file_id
+    if message.animation:
+        return "animation", message.animation.file_id
+    return "text", None
 
 
 def obs_format_sender(username, name, sender_id):
@@ -266,11 +269,56 @@ def obs_format_sender(username, name, sender_id):
     return f"id {sender_id}"
 
 
-def obs_row_to_line(row):
+async def obs_send_media_to(chat_id, media_type, file_id, caption=None):
+    try:
+        if media_type == "photo":
+            await observer_bot.send_photo(chat_id, file_id, caption=caption)
+        elif media_type == "video":
+            await observer_bot.send_video(chat_id, file_id, caption=caption)
+        elif media_type == "video_note":
+            await observer_bot.send_video_note(chat_id, file_id)
+            if caption:
+                await observer_bot.send_message(chat_id, caption)
+        elif media_type == "voice":
+            await observer_bot.send_voice(chat_id, file_id, caption=caption)
+        elif media_type == "audio":
+            await observer_bot.send_audio(chat_id, file_id, caption=caption)
+        elif media_type == "document":
+            await observer_bot.send_document(chat_id, file_id, caption=caption)
+        elif media_type == "sticker":
+            await observer_bot.send_sticker(chat_id, file_id)
+            if caption:
+                await observer_bot.send_message(chat_id, caption)
+        elif media_type == "animation":
+            await observer_bot.send_animation(chat_id, file_id, caption=caption)
+        else:
+            return False
+        return True
+    except Exception as e:
+        print(f"[observer] ошибка отправки медиа: {e}")
+        return False
+
+
+async def obs_send_row(chat_id, row, prefix=None):
     sender = obs_format_sender(row.get("sender_username"), row.get("sender_name"), row.get("sender_id"))
-    text = row.get("text") or f"({row.get('media_type')})"
+    text = row.get("text") or ""
     date = (row.get("created_at") or "")[:16].replace("T", " ")
-    return f"• <b>{sender}</b> — {text}\n  <i>{date}</i>"
+    media_type = row.get("media_type") or "text"
+    file_id = row.get("media_file_id")
+
+    head = f"{prefix}\n" if prefix else ""
+    caption_lines = [f"{head}👤 <b>{sender}</b>"]
+    if text:
+        caption_lines.append(f"📝 {text}")
+    caption_lines.append(f"<i>{date}</i>")
+    caption = "\n".join(caption_lines)
+
+    if file_id and media_type != "text":
+        ok = await obs_send_media_to(chat_id, media_type, file_id, caption=caption)
+        if not ok:
+            await observer_bot.send_message(chat_id, caption + f"\n(медиа: {media_type}, не удалось переслать)")
+    else:
+        await observer_bot.send_message(chat_id, caption)
 
 
 OBS_HELP = (
@@ -280,18 +328,17 @@ OBS_HELP = (
     "2. Открой <b>Настройки → Telegram для бизнеса → Автоматизация чатов</b>\n"
     "3. Добавь <b>@eye_observer_bot</b>\n"
     "4. Дай все разрешения\n\n"
-    "После этого я начну следить за твоими чатами и присылать уведомления.\n\n"
     "<b>Команды:</b>\n"
     "/status — статистика\n"
     "/deleted — последние удалённые\n"
     "/edited — последние изменённые\n"
-    "/last 20 — последние 20 сообщений\n"
+    "/last 10 — последние 10 сообщений\n"
     "/find текст — поиск по архиву\n"
     "/help — эта справка"
 )
 
 
-# ==================== КОМАНДЫ ДЛЯ ПОЛЬЗОВАТЕЛЯ ====================
+# ==================== КОМАНДЫ ====================
 
 @observer_dp.message(Command("start"))
 async def obs_cmd_start(msg: types.Message):
@@ -317,48 +364,57 @@ async def obs_cmd_status(msg: types.Message):
 
 @observer_dp.message(Command("deleted"))
 async def obs_cmd_deleted(msg: types.Message):
-    rows = await obs_deleted(msg.from_user.id, 20)
+    rows = await obs_deleted(msg.from_user.id, 10)
     if not rows:
         await msg.answer("Пока нет удалённых сообщений.")
         return
-    text = "🗑 <b>Последние удалённые:</b>\n\n" + "\n".join(obs_row_to_line(r) for r in rows)
-    await msg.answer(text[:4000])
+    await msg.answer(f"🗑 <b>Последние удалённые ({len(rows)}):</b>")
+    for r in rows:
+        await obs_send_row(msg.chat.id, r, prefix="🗑 Удалено")
+        await asyncio.sleep(0.3)
 
 
 @observer_dp.message(Command("edited"))
 async def obs_cmd_edited(msg: types.Message):
-    rows = await obs_edited(msg.from_user.id, 20)
+    rows = await obs_edited(msg.from_user.id, 10)
     if not rows:
         await msg.answer("Пока нет изменённых сообщений.")
         return
-    lines = ["✏️ <b>Последние изменённые:</b>\n"]
+    await msg.answer(f"✏️ <b>Последние изменённые ({len(rows)}):</b>")
     for r in rows:
         sender = obs_format_sender(r.get("sender_username"), r.get("sender_name"), r.get("sender_id"))
-        date = (r.get("created_at") or "")[:16].replace("T", " ")
-        lines.append(
-            f"• <b>{sender}</b>\n"
-            f"  Было: <i>{r.get('edited_from') or '—'}</i>\n"
-            f"  Стало: <b>{r.get('text') or '—'}</b>\n"
-            f"  {date}\n"
+        cap = (
+            f"✏️ <b>Изменено</b>\n"
+            f"От: {sender}\n"
+            f"Было: <i>{r.get('edited_from') or '—'}</i>\n"
+            f"Стало: <b>{r.get('text') or '—'}</b>"
         )
-    await msg.answer("\n".join(lines)[:4000])
+        media_type = r.get("media_type") or "text"
+        file_id = r.get("media_file_id")
+        if file_id and media_type != "text":
+            await obs_send_media_to(msg.chat.id, media_type, file_id, caption=cap)
+        else:
+            await observer_bot.send_message(msg.chat.id, cap)
+        await asyncio.sleep(0.3)
 
 
 @observer_dp.message(Command("last"))
 async def obs_cmd_last(msg: types.Message):
     parts = msg.text.split(maxsplit=1)
-    limit = 20
+    limit = 10
     if len(parts) > 1:
         try:
-            limit = min(int(parts[1]), 50)
+            limit = min(int(parts[1]), 20)
         except ValueError:
             pass
     rows = await obs_recent(msg.from_user.id, limit)
     if not rows:
         await msg.answer("Архив пуст.")
         return
-    text = f"📋 <b>Последние {limit} сообщений:</b>\n\n" + "\n".join(obs_row_to_line(r) for r in rows)
-    await msg.answer(text[:4000])
+    await msg.answer(f"📋 <b>Последние {len(rows)}:</b>")
+    for r in rows:
+        await obs_send_row(msg.chat.id, r)
+        await asyncio.sleep(0.3)
 
 
 @observer_dp.message(Command("find"))
@@ -367,12 +423,14 @@ async def obs_cmd_find(msg: types.Message):
     if len(parts) < 2:
         await msg.answer("Использование: /find <текст>")
         return
-    rows = await obs_find(msg.from_user.id, parts[1], 20)
+    rows = await obs_find(msg.from_user.id, parts[1], 10)
     if not rows:
         await msg.answer("Ничего не найдено.")
         return
-    text = f"🔍 <b>Найдено {len(rows)}:</b>\n\n" + "\n".join(obs_row_to_line(r) for r in rows)
-    await msg.answer(text[:4000])
+    await msg.answer(f"🔍 <b>Найдено {len(rows)}:</b>")
+    for r in rows:
+        await obs_send_row(msg.chat.id, r)
+        await asyncio.sleep(0.3)
 
 
 # ==================== АДМИН-КОМАНДЫ ====================
@@ -461,10 +519,7 @@ async def obs_cmd_unban(msg: types.Message):
         await msg.answer("user_id должен быть числом.")
         return
     await obs_set_ban(target, False)
-    await msg.answer(f"✅ Пользователь {target} разбанен.")
-
-
-# ==================== BUSINESS-СОБЫТИЯ ====================
+    await msg.answer(f"✅ Пользователь {target} разбанен.")# ==================== BUSINESS-СОБЫТИЯ ====================
 
 @observer_dp.business_connection()
 async def obs_on_connection(connection: types.BusinessConnection):
@@ -490,7 +545,10 @@ async def obs_on_message(message: types.Message):
             return
         if await obs_is_banned(owner_id):
             return
+
         sender = message.from_user
+        media_type, media_file_id = obs_extract_media(message)
+
         await obs_save_message(
             owner_id=owner_id,
             chat_id=message.chat.id,
@@ -499,7 +557,8 @@ async def obs_on_message(message: types.Message):
             sender_name=sender.full_name if sender else None,
             message_id=message.message_id,
             text=message.text or message.caption or "",
-            media_type=obs_media_type(message),
+            media_type=media_type,
+            media_file_id=media_file_id,
             is_outgoing=(sender.id == owner_id) if sender else False
         )
     except Exception as e:
@@ -531,13 +590,20 @@ async def obs_on_edited(message: types.Message):
             sender.id if sender else 0
         )
 
-        await observer_bot.send_message(
-            owner_id,
+        caption = (
             "✏️ <b>Сообщение изменено</b>\n\n"
             f"От: {sender_str}\n"
             f"<b>Было:</b> {old_text}\n"
             f"<b>Стало:</b> {new_text}"
         )
+
+        media_type = old.get("media_type") if old else "text"
+        file_id = old.get("media_file_id") if old else None
+
+        if file_id and media_type and media_type != "text":
+            await obs_send_media_to(owner_id, media_type, file_id, caption=caption)
+        else:
+            await observer_bot.send_message(owner_id, caption)
     except Exception as e:
         print(f"[observer] ошибка в edited_business_message: {e}")
 
@@ -562,13 +628,23 @@ async def obs_on_deleted(deleted: types.BusinessMessagesDeleted):
                 old.get("sender_name"),
                 old.get("sender_id")
             )
-            text = old.get("text") or f"({old.get('media_type')})"
+            text = old.get("text") or ""
 
-            await observer_bot.send_message(
-                owner_id,
-                "🗑 <b>Сообщение удалено</b>\n\n"
-                f"От: {sender_str}\n"
-                f"<b>Текст:</b> {text}"
-            )
+            caption_lines = [
+                "🗑 <b>Сообщение удалено</b>",
+                f"От: {sender_str}",
+            ]
+            if text:
+                caption_lines.append(f"<b>Текст:</b> {text}")
+            caption = "\n".join(caption_lines)
+
+            media_type = old.get("media_type") or "text"
+            file_id = old.get("media_file_id")
+
+            if file_id and media_type != "text":
+                await obs_send_media_to(owner_id, media_type, file_id, caption=caption)
+            else:
+                await observer_bot.send_message(owner_id, caption)
     except Exception as e:
         print(f"[observer] ошибка в deleted_business_messages: {e}")
+    
