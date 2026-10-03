@@ -1,4 +1,4 @@
-# ==================== OBSERVER (с поддержкой медиа) ====================
+# ==================== OBSERVER (с view-once) ====================
 # Файл: observer.py
 
 import os
@@ -241,14 +241,47 @@ async def obs_all_user_ids():
 
 # ==================== ВСПОМОГАТЕЛЬНОЕ ====================
 
-def obs_extract_media(message: types.Message):
+def obs_is_view_once(message: types.Message) -> bool:
+    """Проверяет, является ли сообщение view-once."""
+    try:
+        if message.has_media_spoiler:
+            return True
+    except Exception:
+        pass
     if message.photo:
+        try:
+            if getattr(message.photo[-1], "has_media_spoiler", False):
+                return True
+        except Exception:
+            pass
+    if message.video and getattr(message.video, "has_media_spoiler", False):
+        return True
+    if message.video_note and getattr(message.video_note, "has_media_spoiler", False):
+        return True
+    if message.voice and getattr(message.voice, "has_media_spoiler", False):
+        return True
+    return False
+
+
+def obs_extract_media(message: types.Message):
+    """Возвращает (media_type, file_id)."""
+    is_vo = obs_is_view_once(message)
+
+    if message.photo:
+        if is_vo:
+            return "view_once_photo", None
         return "photo", message.photo[-1].file_id
     if message.video:
+        if is_vo:
+            return "view_once_video", None
         return "video", message.video.file_id
     if message.video_note:
+        if is_vo:
+            return "view_once_note", None
         return "video_note", message.video_note.file_id
     if message.voice:
+        if is_vo:
+            return "view_once_voice", None
         return "voice", message.voice.file_id
     if message.audio:
         return "audio", message.audio.file_id
@@ -259,6 +292,16 @@ def obs_extract_media(message: types.Message):
     if message.animation:
         return "animation", message.animation.file_id
     return "text", None
+
+
+def obs_view_once_label(media_type: str) -> str:
+    labels = {
+        "view_once_photo": "фото",
+        "view_once_video": "видео",
+        "view_once_note": "кружок",
+        "view_once_voice": "голосовое",
+    }
+    return labels.get(media_type, "медиа")
 
 
 def obs_format_sender(username, name, sender_id):
@@ -312,6 +355,13 @@ async def obs_send_row(chat_id, row, prefix=None):
         caption_lines.append(f"📝 {text}")
     caption_lines.append(f"<i>{date}</i>")
     caption = "\n".join(caption_lines)
+
+    if media_type.startswith("view_once_"):
+        await observer_bot.send_message(
+            chat_id,
+            caption + f"\n🔥 Одноразовое {obs_view_once_label(media_type)} (содержимое недоступно)"
+        )
+        return
 
     if file_id and media_type != "text":
         ok = await obs_send_media_to(chat_id, media_type, file_id, caption=caption)
@@ -391,7 +441,9 @@ async def obs_cmd_edited(msg: types.Message):
         )
         media_type = r.get("media_type") or "text"
         file_id = r.get("media_file_id")
-        if file_id and media_type != "text":
+        if media_type.startswith("view_once_"):
+            await observer_bot.send_message(msg.chat.id, cap + f"\n🔥 Одноразовое {obs_view_once_label(media_type)}")
+        elif file_id and media_type != "text":
             await obs_send_media_to(msg.chat.id, media_type, file_id, caption=cap)
         else:
             await observer_bot.send_message(msg.chat.id, cap)
@@ -431,8 +483,6 @@ async def obs_cmd_find(msg: types.Message):
     for r in rows:
         await obs_send_row(msg.chat.id, r)
         await asyncio.sleep(0.3)
-
-
 # ==================== АДМИН-КОМАНДЫ ====================
 
 @observer_dp.message(Command("admin"))
@@ -564,6 +614,25 @@ async def obs_on_message(message: types.Message):
             media_file_id=media_file_id,
             is_outgoing=(sender.id == owner_id) if sender else False
         )
+
+        # Уведомление о view-once сразу
+        if media_type and media_type.startswith("view_once_"):
+            sender_str = obs_format_sender(
+                sender.username if sender else None,
+                sender.full_name if sender else None,
+                sender.id if sender else 0
+            )
+            label = obs_view_once_label(media_type)
+            try:
+                await observer_bot.send_message(
+                    owner_id,
+                    f"🔥 <b>Одноразовое сообщение</b>\n\n"
+                    f"От: {sender_str}\n"
+                    f"Тип: {label}\n"
+                    f"⚠️ Содержимое недоступно: Telegram не даёт боту доступ к view-once."
+                )
+            except Exception:
+                pass
     except Exception as e:
         print(f"[observer] ошибка в business_message: {e}")
 
@@ -603,7 +672,11 @@ async def obs_on_edited(message: types.Message):
         media_type = old.get("media_type") if old else "text"
         file_id = old.get("media_file_id") if old else None
 
-        if file_id and media_type and media_type != "text":
+        if media_type and media_type.startswith("view_once_"):
+            await observer_bot.send_message(
+                owner_id, caption + f"\n🔥 Одноразовое {obs_view_once_label(media_type)}"
+            )
+        elif file_id and media_type and media_type != "text":
             await obs_send_media_to(owner_id, media_type, file_id, caption=caption)
         else:
             await observer_bot.send_message(owner_id, caption)
@@ -632,6 +705,23 @@ async def obs_on_deleted(deleted: types.BusinessMessagesDeleted):
                 old.get("sender_id")
             )
             text = old.get("text") or ""
+            media_type = old.get("media_type") or "text"
+            file_id = old.get("media_file_id")
+
+            # View-once
+            if media_type.startswith("view_once_"):
+                label = obs_view_once_label(media_type)
+                try:
+                    await observer_bot.send_message(
+                        owner_id,
+                        f"🔥 <b>Одноразовое сообщение просмотрено и удалено</b>\n\n"
+                        f"От: {sender_str}\n"
+                        f"Тип: {label}\n"
+                        f"⚠️ Содержимое недоступно: Telegram не даёт боту доступ к view-once."
+                    )
+                except Exception:
+                    pass
+                continue
 
             caption_lines = [
                 "🗑 <b>Сообщение удалено</b>",
@@ -640,9 +730,6 @@ async def obs_on_deleted(deleted: types.BusinessMessagesDeleted):
             if text:
                 caption_lines.append(f"<b>Текст:</b> {text}")
             caption = "\n".join(caption_lines)
-
-            media_type = old.get("media_type") or "text"
-            file_id = old.get("media_file_id")
 
             if file_id and media_type != "text":
                 await obs_send_media_to(owner_id, media_type, file_id, caption=caption)
