@@ -431,7 +431,9 @@ async def obs_cmd_find(msg: types.Message):
     for r in rows:
         await obs_send_row(msg.chat.id, r)
         await asyncio.sleep(0.3)
-        # ==================== АДМИН-КОМАНДЫ ====================
+
+
+# ==================== АДМИН-КОМАНДЫ ====================
 
 @observer_dp.message(Command("admin"))
 async def obs_cmd_admin(msg: types.Message):
