@@ -421,7 +421,7 @@ async def obs_cmd_last(msg: types.Message):
 async def obs_cmd_find(msg: types.Message):
     parts = msg.text.split(maxsplit=1)
     if len(parts) < 2:
-        await msg.answer("Использование: /find <текст>")
+        await msg.answer("Использование: /find &lt;текст&gt;")
         return
     rows = await obs_find(msg.from_user.id, parts[1], 10)
     if not rows:
@@ -431,9 +431,7 @@ async def obs_cmd_find(msg: types.Message):
     for r in rows:
         await obs_send_row(msg.chat.id, r)
         await asyncio.sleep(0.3)
-
-
-# ==================== АДМИН-КОМАНДЫ ====================
+        # ==================== АДМИН-КОМАНДЫ ====================
 
 @observer_dp.message(Command("admin"))
 async def obs_cmd_admin(msg: types.Message):
@@ -473,7 +471,7 @@ async def obs_cmd_broadcast(msg: types.Message):
         return
     parts = msg.text.split(maxsplit=1)
     if len(parts) < 2:
-        await msg.answer("Использование: /broadcast <текст>")
+        await msg.answer("Использование: /broadcast &lt;текст&gt;")
         return
     text = parts[1]
     user_ids = await obs_all_user_ids()
@@ -494,7 +492,7 @@ async def obs_cmd_ban(msg: types.Message):
         return
     parts = msg.text.split()
     if len(parts) < 2:
-        await msg.answer("Использование: /ban <user_id>")
+        await msg.answer("Использование: /ban &lt;user_id&gt;")
         return
     try:
         target = int(parts[1])
@@ -511,7 +509,7 @@ async def obs_cmd_unban(msg: types.Message):
         return
     parts = msg.text.split()
     if len(parts) < 2:
-        await msg.answer("Использование: /unban <user_id>")
+        await msg.answer("Использование: /unban &lt;user_id&gt;")
         return
     try:
         target = int(parts[1])
@@ -519,7 +517,10 @@ async def obs_cmd_unban(msg: types.Message):
         await msg.answer("user_id должен быть числом.")
         return
     await obs_set_ban(target, False)
-    await msg.answer(f"✅ Пользователь {target} разбанен.")# ==================== BUSINESS-СОБЫТИЯ ====================
+    await msg.answer(f"✅ Пользователь {target} разбанен.")
+
+
+# ==================== BUSINESS-СОБЫТИЯ ====================
 
 @observer_dp.business_connection()
 async def obs_on_connection(connection: types.BusinessConnection):
@@ -647,4 +648,3 @@ async def obs_on_deleted(deleted: types.BusinessMessagesDeleted):
                 await observer_bot.send_message(owner_id, caption)
     except Exception as e:
         print(f"[observer] ошибка в deleted_business_messages: {e}")
-    
